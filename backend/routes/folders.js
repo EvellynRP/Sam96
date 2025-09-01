@@ -144,12 +144,14 @@ router.post('/', authMiddleware, async (req, res) => {
       await db.execute('DELETE FROM folders WHERE id = ?', [result.insertId]);
       return res.status(500).json({ 
         error: 'Erro ao criar pasta no servidor',
-        details: sshError.message,
+        details: `${sshError.message}. Verifique se o servidor SSH está acessível e se o usuário 'streaming' existe.`,
         debug_info: {
           user_login: userLogin,
           server_id: serverId,
           folder_name: sanitizedName,
-          server_path: caminhoServidor
+          server_path: caminhoServidor,
+          error_type: sshError.name || 'Unknown',
+          timestamp: new Date().toISOString()
         }
       });
     }

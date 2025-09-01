@@ -39,22 +39,7 @@ class SSHManager {
         try {
             const db = require('./database');
 
-            // Verificar cooldown para conexões
-            const cooldownKey = `connection_${serverId}`;
-            // Remover cooldown para conexões críticas
-            // if (this.isOperationInCooldown(cooldownKey)) {
-            //   const [serverRows] = await db.execute(
-            //     'SELECT ip, porta_ssh FROM wowza_servers WHERE codigo = ? AND status = "ativo"',
-            //     [serverId]
-            //   );
-            //   if (serverRows.length > 0) {
-            //     const server = serverRows[0];
-            //     const connectionKey = `${server.ip}:${server.porta_ssh}`;
-            //     if (this.connections.has(connectionKey)) {
-            //       return this.connections.get(connectionKey);
-            //     }
-            //   }
-            // }
+            console.log(`🔌 [Servidor ${serverId}] Obtendo conexão SSH...`);
 
             // Buscar dados do servidor no banco
             const [serverRows] = await db.execute(
@@ -63,33 +48,42 @@ class SSHManager {
             );
 
             if (serverRows.length === 0) {
+                console.error(`❌ [Servidor ${serverId}] Servidor não encontrado no banco de dados`);
                 throw new Error('Servidor não encontrado ou inativo');
             }
 
             const server = serverRows[0];
             const connectionKey = `${server.ip}:${server.porta_ssh}`;
+            
+            console.log(`🔍 [Servidor ${serverId}] Dados do servidor: ${server.ip}:${server.porta_ssh}`);
 
             // Reaproveitar conexão ativa se já existir
             if (this.connections.has(connectionKey)) {
                 const existingConn = this.connections.get(connectionKey);
                 if (existingConn.conn && existingConn.connected) {
+                    console.log(`♻️ [Servidor ${serverId}] Reutilizando conexão existente`);
+                    existingConn.lastUsed = new Date();
                     return existingConn;
                 }
                 // Remover conexão inválida
+                console.log(`🗑️ [Servidor ${serverId}] Removendo conexão inválida`);
                 this.connections.delete(connectionKey);
             }
 
+            console.log(`🔗 [Servidor ${serverId}] Criando nova conexão SSH para ${server.ip}:${server.porta_ssh}`);
+            
             // Criar nova conexão SSH
             const conn = new Client();
 
             return await new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
+                    console.error(`⏰ [Servidor ${serverId}] Timeout na conexão SSH (35s)`);
                     reject(new Error(`Timeout ao conectar no servidor ${server.ip}`));
                 }, 35000);
 
                 conn.on('ready', () => {
                     clearTimeout(timeout);
-                    console.log(`✅ Conectado via SSH ao servidor ${server.ip}`);
+                    console.log(`✅ [Servidor ${serverId}] Conectado via SSH ao servidor ${server.ip}:${server.porta_ssh}`);
 
                     const connectionData = {
                         conn,
@@ -99,32 +93,43 @@ class SSHManager {
                     };
 
                     this.connections.set(connectionKey, connectionData);
-                    this.markOperationExecuted(cooldownKey);
                     resolve(connectionData);
                 });
 
                 conn.on('error', (err) => {
                     clearTimeout(timeout);
-                    console.error(`❌ Erro SSH para ${server.ip}:`, err.message);
+                    console.error(`❌ [Servidor ${serverId}] Erro SSH para ${server.ip}:${server.porta_ssh}:`, err.message);
+                    console.error(`📍 [Servidor ${serverId}] Detalhes do erro:`, {
+                        code: err.code,
+                        level: err.level,
+                        description: err.description
+                    });
                     reject(err);
                 });
 
                 conn.on('close', () => {
-                    console.log(`🔌 Conexão SSH fechada para ${server.ip}`);
+                    console.log(`🔌 [Servidor ${serverId}] Conexão SSH fechada para ${server.ip}:${server.porta_ssh}`);
                     this.connections.delete(connectionKey);
                 });
 
+                console.log(`🔐 [Servidor ${serverId}] Tentando conectar com usuário root...`);
                 conn.connect({
                     host: server.ip,
                     port: server.porta_ssh || 22,
                     username: 'root',
                     password: server.senha_root,
                     readyTimeout: 30000,
-                    keepaliveInterval: 30000
+                    keepaliveInterval: 30000,
+                    algorithms: {
+                        kex: ['diffie-hellman-group14-sha256', 'diffie-hellman-group14-sha1'],
+                        cipher: ['aes128-ctr', 'aes192-ctr', 'aes256-ctr'],
+                        hmac: ['hmac-sha2-256', 'hmac-sha1'],
+                        compress: ['none']
+                    }
                 });
             });
         } catch (error) {
-            console.error('Erro ao obter conexão SSH:', error.message);
+            console.error(`❌ [Servidor ${serverId}] Erro crítico ao obter conexão SSH:`, error.message);
             throw error;
         }
     }
