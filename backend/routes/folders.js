@@ -106,52 +106,82 @@ router.post('/', authMiddleware, async (req, res) => {
     try {
       // Garantir que estrutura do usuário existe primeiro
       // Primeiro, garantir que o diretório base do usuário existe
-      console.log(`🏗️ Criando estrutura base para usuário ${userLogin} no servidor ${serverId}`);
+      console.log(`🚀 [PASTA] Iniciando criação de pasta "${nome}" para usuário "${userLogin}" no servidor ${serverId}`);
+      console.log(`📝 [PASTA] Nome original: "${nome}" -> Nome sanitizado: "${sanitizedName}"`);
+      console.log(`📍 [PASTA] Caminho no servidor: ${caminhoServidor}`);
       
+      // Criar estrutura base do usuário
+      console.log(`🏗️ [PASTA] Criando estrutura base para usuário ${userLogin}`);
       const userBaseResult = await SSHManager.createUserDirectory(serverId, userLogin);
       if (!userBaseResult.success) {
-        throw new Error(`Falha ao criar diretório base: ${userBaseResult.error || 'Erro desconhecido'}`);
+        console.error(`❌ [PASTA] Falha ao criar diretório base:`, userBaseResult);
+        throw new Error(`Falha crítica ao criar diretório base do usuário: ${userBaseResult.error || 'Erro desconhecido'}`);
       }
       
-      console.log(`✅ Diretório base criado: ${userBaseResult.userDir}`);
+      console.log(`✅ [PASTA] Diretório base criado/verificado: ${userBaseResult.userDir}`);
       
       // Aguardar criação do diretório base
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log(`⏳ [PASTA] Aguardando estabilização da estrutura base...`);
+      await new Promise(resolve => setTimeout(resolve, 3000));
       
       // Agora criar a pasta específica
-      console.log(`📁 Criando pasta específica: ${sanitizedName}`);
+      console.log(`📁 [PASTA] Criando pasta específica: ${sanitizedName}`);
       
       const folderResult = await SSHManager.createUserFolder(serverId, userLogin, sanitizedName);
       if (!folderResult.success) {
-        throw new Error(`Falha ao criar pasta específica: ${folderResult.error || 'Erro desconhecido'}`);
+        console.error(`❌ [PASTA] Falha ao criar pasta específica:`, folderResult);
+        throw new Error(`Falha crítica ao criar pasta específica: ${folderResult.error || 'Erro desconhecido'}`);
       }
       
-      console.log(`✅ Pasta ${sanitizedName} criada com sucesso: ${folderResult.folderPath}`);
+      console.log(`✅ [PASTA] Pasta ${sanitizedName} criada com sucesso: ${folderResult.folderPath}`);
       
       // Verificar se a pasta foi realmente criada
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log(`🔍 [PASTA] Verificação final da pasta criada...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       const verificationResult = await SSHManager.executeCommand(serverId, `test -d "${folderResult.folderPath}" && echo "EXISTS" || echo "NOT_EXISTS"`);
       if (!verificationResult.stdout.includes('EXISTS')) {
-        throw new Error(`Pasta não foi criada corretamente: ${folderResult.folderPath}`);
+        console.error(`❌ [PASTA] ERRO CRÍTICO: Pasta não foi criada corretamente: ${folderResult.folderPath}`);
+        
+        // Tentar listar o diretório pai para debug
+        try {
+          const parentDir = `/home/streaming/${userLogin}`;
+          const listResult = await SSHManager.executeCommand(serverId, `ls -la "${parentDir}"`);
+          console.log(`📋 [PASTA] Conteúdo do diretório pai: ${listResult.stdout}`);
+        } catch (listError) {
+          console.error(`❌ [PASTA] Erro ao listar diretório pai: ${listError.message}`);
+        }
+        
+        throw new Error(`VERIFICAÇÃO FALHOU: Pasta não foi criada corretamente: ${folderResult.folderPath}`);
       }
       
-      console.log(`✅ Verificação concluída: Pasta ${sanitizedName} existe no servidor`);
+      console.log(`✅ [PASTA] SUCESSO TOTAL: Pasta ${sanitizedName} criada e verificada no servidor`);
+      console.log(`📍 [PASTA] Caminho final: ${folderResult.folderPath}`);
       
     } catch (sshError) {
-      console.error('Erro ao criar pasta no servidor:', sshError);
+      console.error(`❌ [PASTA] ERRO CRÍTICO ao criar pasta no servidor:`, sshError);
+      console.error(`📍 [PASTA] Contexto do erro:`, {
+        user_login: userLogin,
+        server_id: serverId,
+        folder_name: sanitizedName,
+        server_path: caminhoServidor,
+        error_message: sshError.message,
+        error_stack: sshError.stack
+      });
+      
       // Remover entrada do banco se falhou no servidor
       await db.execute('DELETE FROM folders WHERE id = ?', [result.insertId]);
       return res.status(500).json({ 
-        error: 'Erro ao criar pasta no servidor',
-        details: `${sshError.message}. Verifique se o servidor SSH está acessível e se o usuário 'streaming' existe.`,
+        error: 'ERRO CRÍTICO: Falha ao criar pasta no servidor',
+        details: `${sshError.message}. Verifique: 1) Servidor SSH acessível, 2) Usuário 'streaming' existe, 3) Permissões corretas, 4) Espaço em disco disponível.`,
         debug_info: {
           user_login: userLogin,
           server_id: serverId,
           folder_name: sanitizedName,
           server_path: caminhoServidor,
           error_type: sshError.name || 'Unknown',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          full_error: sshError.message
         }
       });
     }
