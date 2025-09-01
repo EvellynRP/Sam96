@@ -208,106 +208,168 @@ class SSHManager {
 
     async createUserDirectory(serverId, userLogin) {
         try {
-            // Verificar cooldown para criação de diretório
-            const operationKey = this.generateOperationKey('createUserDirectory', serverId, userLogin);
-            if (this.isOperationInCooldown(operationKey)) {
-                console.log(`⏭️ Pulando criação de diretório (cooldown): ${userLogin}`);
-                return { success: true, userDir: `/home/streaming/${userLogin}` };
-            }
+            console.log(`🏗️ Criando estrutura de diretório para usuário: ${userLogin} no servidor: ${serverId}`);
 
             // Nova estrutura: /home/streaming/[usuario]
             const userDir = `/home/streaming/${userLogin}`;
 
-            // Verificar se diretório já existe antes de criar
+            // Verificar se diretório base /home/streaming existe
+            console.log(`🔍 Verificando diretório base: /home/streaming`);
+            const baseStreamingCheck = await this.executeCommand(serverId, `test -d "/home/streaming" && echo "EXISTS" || echo "NOT_EXISTS"`);
+            if (!baseStreamingCheck.stdout.includes('EXISTS')) {
+                console.log(`📁 Criando diretório base: /home/streaming`);
+                await this.executeCommand(serverId, `mkdir -p /home/streaming && chmod 755 /home/streaming`);
+            }
+            
+            // Verificar se diretório do usuário já existe
+            console.log(`🔍 Verificando diretório do usuário: ${userDir}`);
             const checkResult = await this.executeCommand(serverId, `test -d "${userDir}" && echo "EXISTS" || echo "NOT_EXISTS"`);
             if (checkResult.stdout.includes('EXISTS')) {
                 console.log(`✅ Diretório já existe: ${userDir}`);
-                this.markOperationExecuted(operationKey);
                 return { success: true, userDir };
             }
 
+            console.log(`📁 Criando diretório do usuário: ${userDir}`);
             const commands = [
-                `mkdir -p ${userDir}`,
-                `mkdir -p ${userDir}/recordings`,
-                `mkdir -p ${userDir}/logos`,
-                `chown -R streaming:streaming ${userDir} || true`,
-                `chmod -R 755 ${userDir} || true`
+                `mkdir -p "${userDir}"`,
+                `mkdir -p "${userDir}/recordings"`,
+                `mkdir -p "${userDir}/logos"`,
+                `chmod -R 755 "${userDir}" || true`,
+                `chown -R streaming:streaming "${userDir}" 2>/dev/null || true`,
+                `ls -la "${userDir}" || true`
             ];
 
             for (const command of commands) {
                 try {
+                    console.log(`🔧 Executando: ${command}`);
                     const result = await this.executeCommand(serverId, command);
+                    console.log(`📋 Resultado: ${result.stdout.trim()}`);
                     if (result.stderr) {
                         console.warn(`⚠️ Aviso no comando "${command}": ${result.stderr}`);
                     }
                 } catch (cmdError) {
-                    console.warn(`⚠️ Erro no comando "${command}": ${cmdError.message}`);
-                    // Continuar mesmo com erros de permissão
+                    console.error(`❌ Erro no comando "${command}": ${cmdError.message}`);
+                    if (command.includes('mkdir')) {
+                        // Se falhou ao criar diretório, é erro crítico
+                        throw new Error(`Falha crítica ao criar diretório: ${cmdError.message}`);
+                    }
+                    // Para outros comandos (chmod, chown), continuar
                 }
             }
 
+            // Aguardar criação
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Verificação final
+            console.log(`🔍 Verificação final do diretório: ${userDir}`);
+            const finalCheck = await this.executeCommand(serverId, `test -d "${userDir}" && echo "EXISTS" || echo "NOT_EXISTS"`);
+            if (!finalCheck.stdout.includes('EXISTS')) {
+                throw new Error(`Diretório não foi criado: ${userDir}`);
+            }
+            
             console.log(`✅ Estrutura de diretório verificada/criada para usuário ${userLogin}`);
-
-            this.markOperationExecuted(operationKey);
-
             return { success: true, userDir };
         } catch (error) {
-            console.error(`Erro ao criar diretório para usuário ${userLogin}:`, error);
+            console.error(`❌ ERRO CRÍTICO ao criar diretório para usuário ${userLogin}:`, error);
+            console.error(`📍 Detalhes: Servidor ${serverId}, Caminho: /home/streaming/${userLogin}`);
             throw error;
         }
     }
 
     async createUserFolder(serverId, userLogin, folderName) {
         try {
-            // Verificar cooldown para criação de pasta
-            const operationKey = this.generateOperationKey('createUserFolder', serverId, userLogin, folderName);
-            if (this.isOperationInCooldown(operationKey)) {
-                console.log(`⏭️ Pulando criação de pasta (cooldown): ${folderName}`);
-                return { success: true, folderPath: `/home/streaming/${userLogin}/${folderName}` };
-            }
+            console.log(`📁 Criando pasta: ${folderName} para usuário: ${userLogin} no servidor: ${serverId}`);
 
             // Estrutura correta: /home/streaming/[usuario]/[pasta]
             const folderPath = `/home/streaming/${userLogin}/${folderName}`;
 
-            // Verificar se pasta já existe
+            // Primeiro, garantir que o diretório base do usuário existe
+            const userBaseDir = `/home/streaming/${userLogin}`;
+            console.log(`🏗️ Verificando diretório base: ${userBaseDir}`);
+            
+            const baseCheckResult = await this.executeCommand(serverId, `test -d "${userBaseDir}" && echo "EXISTS" || echo "NOT_EXISTS"`);
+            if (!baseCheckResult.stdout.includes('EXISTS')) {
+                console.log(`📁 Criando diretório base: ${userBaseDir}`);
+                await this.createUserDirectory(serverId, userLogin);
+                
+                // Aguardar criação do diretório base
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            
+            // Verificar se pasta específica já existe
+            console.log(`🔍 Verificando se pasta existe: ${folderPath}`);
             const checkResult = await this.executeCommand(serverId, `test -d "${folderPath}" && echo "EXISTS" || echo "NOT_EXISTS"`);
             if (checkResult.stdout.includes('EXISTS')) {
                 console.log(`✅ Pasta já existe: ${folderPath}`);
-                this.markOperationExecuted(operationKey);
                 return { success: true, folderPath };
             }
 
+            console.log(`📁 Criando nova pasta: ${folderPath}`);
             const commands = [
                 `mkdir -p ${folderPath}`,
-                `chmod 755 ${folderPath}`,
-                `chown streaming:streaming ${folderPath} 2>/dev/null || true`
+                `chmod 755 ${folderPath} || true`,
+                `chown streaming:streaming ${folderPath} 2>/dev/null || true`,
+                `ls -la ${folderPath} || true`
             ];
 
             for (const command of commands) {
                 try {
+                    console.log(`🔧 Executando comando: ${command}`);
                     const result = await this.executeCommand(serverId, command);
+                    console.log(`📋 Resultado: ${result.stdout.trim()}`);
                     if (result.stderr) {
                         console.warn(`⚠️ Aviso: ${result.stderr}`);
                     }
                 } catch (cmdError) {
-                    console.warn(`⚠️ Erro: ${cmdError.message}`);
-                    // Continuar mesmo com erros de permissão
+                    console.error(`❌ Erro no comando "${command}": ${cmdError.message}`);
+                    if (command.includes('mkdir')) {
+                        // Se falhou ao criar pasta, é erro crítico
+                        throw new Error(`Falha crítica ao criar pasta: ${cmdError.message}`);
+                    }
+                    // Para outros comandos (chmod, chown), continuar
                 }
             }
 
-            // Verificar se pasta foi criada (sem aguardar)
+            // Aguardar um pouco para garantir que pasta foi criada
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Verificar se pasta foi criada
+            console.log(`🔍 Verificação final da pasta: ${folderPath}`);
             const finalCheckResult = await this.executeCommand(serverId, `test -d "${folderPath}" && echo "EXISTS" || echo "NOT_EXISTS"`);
 
             if (!finalCheckResult.stdout.includes('EXISTS')) {
-                throw new Error(`Pasta não foi criada: ${folderPath}`);
+                console.error(`❌ ERRO CRÍTICO: Pasta não foi criada: ${folderPath}`);
+                
+                // Tentar criar manualmente com comando mais simples
+                console.log(`🔄 Tentativa de recuperação: criando pasta manualmente`);
+                try {
+                    await this.executeCommand(serverId, `mkdir -p "${folderPath}" && chmod 755 "${folderPath}"`);
+                    
+                    // Verificar novamente
+                    const recoveryCheck = await this.executeCommand(serverId, `test -d "${folderPath}" && echo "EXISTS" || echo "NOT_EXISTS"`);
+                    if (!recoveryCheck.stdout.includes('EXISTS')) {
+                        throw new Error(`Falha na recuperação: pasta ${folderPath} não foi criada`);
+                    }
+                    console.log(`✅ Pasta criada na tentativa de recuperação: ${folderPath}`);
+                } catch (recoveryError) {
+                    throw new Error(`Pasta não foi criada mesmo após tentativa de recuperação: ${recoveryError.message}`);
+                }
+            } else {
+                console.log(`✅ Pasta criada com sucesso: ${folderPath}`);
             }
 
-            console.log(`✅ Pasta ${folderName} criada: ${folderPath}`);
-            this.markOperationExecuted(operationKey);
+            // Verificar permissões da pasta criada
+            try {
+                const permissionsResult = await this.executeCommand(serverId, `ls -la "${folderPath}"`);
+                console.log(`📋 Permissões da pasta criada: ${permissionsResult.stdout.trim()}`);
+            } catch (permError) {
+                console.warn(`⚠️ Não foi possível verificar permissões: ${permError.message}`);
+            }
 
             return { success: true, folderPath };
         } catch (error) {
-            console.error(`Erro ao criar pasta ${folderName}:`, error);
+            console.error(`❌ ERRO CRÍTICO ao criar pasta ${folderName} para usuário ${userLogin}:`, error);
+            console.error(`📍 Detalhes: Servidor ${serverId}, Caminho: /home/streaming/${userLogin}/${folderName}`);
             throw error;
         }
     }
